@@ -1,0 +1,224 @@
+@author Jonathan De Wachter <dewachter.jonathan@gmail.com>
+@copyright 2020-2021 Jonathan De Wachter
+@version 0.1.0
+@title Rodeo - From API specs to Cowboy handlers
+
+@doc Rodeo complements Cowboy with a generic handler and encourages you to
+implement an HTTP API from a well-defined specifications. The result is less
+intrusive as you are simply wrapping your existing regular Erlang functions and
+define their input and output.
+
+<em>Features</em>
+
+<ul>
+  <li>From entities and actions...</li>
+  <li>... to HTTP collections and resources</li>
+  <li>Exclusively JSON-oriented</li>
+  <li>Purposely simple and restricting</li>
+  <li>... and thus discarding some standards</li>
+  <li>Built-in automatic API docs generator</li>
+  <li>It's a work-in-progress; it's evolving as personal need arise</li>
+</ul>
+
+Written by <em>Jonathan De Wachter</em> on January 2021 and licensed under the
+<em>MIT license</em>.
+
+== Documentation ==
+
+Given the library is designed to be straight-forward, all the information
+that you need to know in order to get started and make full use of this tool
+can fit on one page.
+
+<b>Table of Contents</b>
+
+<ol>
+  <li>{@section Explanation of the core idea}</li>
+  <li>{@section An alternative to Cowboy handlers}</li>
+  <li>{@section Breaking things down for you}</li>
+  <li>{@section Towards simplicity and restrictions}</li>
+  <li>{@section A journey through the Rodeo handler}</li>
+  <li>{@section Writing your API specifications}</li>
+  <li>{@section Routes generation with options}</li>
+</ol>
+
+=== Explanation of the core idea ===
+
+Most of server-side software requires an HTTP API to let other software
+interact with it, and if we're to put asides <b>websockets</b> or the
+upload/download of files for a second, this takes form of the request/response
+model, which is exactly the same model as regular plain Erlang function; an
+Erlang function where its input is the HTTP request and its output is the HTTP
+response.
+
+Almost always, the HTTP API is a 1:1 mapping to a local Erlang API. Let's
+suppose you're implementing a resource/collection named <b>book</b>, you will
+most likely end up with a module `book.erl' containing functions for all the
+CRUD operations and additional ones.
+
+<ul>
+  <li>`create()'</li>
+  <li>`edit()'</li>
+  <li>`describe()'</li>
+  <li>`delete()'</li>
+  <li>`list()'</li>
+  <li>`import_cvs()'</li>
+</ul>
+
+And later on, some more code to make them accessible via the following HTTP
+requests (often with the '/api' prefix and a JSON body for the data).
+
+<ul>
+  <li>`POST   /api/books            {"foo": "bar"}'</li>
+  <li>`PUT    /api/books/42         {...}'</li>
+  <li>`GET    /api/books/42'</li>
+  <li>`DELETE /api/books/42'</li>
+  <li>`GET    /api/books'</li>
+  <li>`POST   /api/books/import-cvs {...}'</li>
+</ul>
+
+This is an extremely recurrent pattern in software, yet it's very cumbersome as
+they always require the same processing layers before the HTTP request reaches
+its corresponding 1:1 function. Indeed, since it comes from the Internet, the
+HTTP request must be parsed and checked for validity, sometimes rejected
+according to permissions, expected and unexpected errors must be handled, and so on. At
+this point, there's nothing really different from software to software and the
+only importance is that code remains consistent, and offer a somewhat
+standard/expected HTTP API to be used by the end-user.
+
+> Did you know that almost all HTTP API-related tools of Google such as CLIs and
+programming library/module/framework for programming languages are generated
+from a single specifications? This is because the HTTP API specs is
+well-designed and remain consistent. Rodeo is about following the simple
+principle on the back-end side.
+
+Rodeo helps you build this processing layer in the less intrusive way possible
+and in order to keep your code base clean.
+
+=== An alternative to Cowboy handlers ===
+
+Since the language of choice is Erlang, you will likely choose <b>Cowboy</b> to
+implement this HTTP API, and <b>Rodeo</b> aims to complete it by offering a
+generic handler.
+
+The rational is as follow; if a standard HTTP API is designed around the
+concepts of collections and resources, in Erlang, we will naturally organize the
+code into one module per collection/resource with functions for each action
+operating on the collection/resource. Therefore, we want to keep this natural
+code structure and augment it with additional HTTP API related logic.
+
+This is why instead of picking a (low-level or high-level) Cowboy handler among
+the ones available, you will make those supposedly existing Erlang modules
+implement the <b>Rodeo entity</b> behavior. It's done by adding the `specs/0'
+function that returns information about your "entity" and "actions" (a term
+that will be clarified later). Basically, it's all the information needed to map
+the HTTP requests to the input of your functions, and the function output to
+HTTP response.
+
+If we continue with the example of earlier, the `book.erl' module could end up
+looking like this.
+
+```
+-module(book)
+-behavior(rodeo_entity).
+-export([specs/0]). % the single behavior function
+-export([create/2, delete/1, list/0]). % your ordinary module functions
+
+specs() ->
+  #{
+    name => "Book",
+    %% Useful if you serve the specs over the Internet to provide a HTTP API docs
+    description => "...",
+    path => "book"
+    actions => [
+      #{
+        type => collection,
+        method => post,
+        input => ["tittle"],
+        output => ["id"],
+        function => create
+      },
+      %% ...
+    ]
+  }.
+
+%% ...
+'''
+
+Later, you can list your entities (and indirectly all its actions) in a master
+Rodeo specifications which is used to generate the Cowboy route paths
+(internally, a generic internal Cowboy handler to process the HTTP request is
+used).
+
+```
+Specs = #{
+    title      => "My HTTP API",
+    version    => {0, 1, 0},
+    entities => [book]
+},
+Routes = rodeo:generate_routes(Specs),
+cowboy:compile(Routes).
+'''
+
+At this point, you wonder about the difference between the concepts of entities
+and actions, and the concepts of collections and resources. An <b>entity</b> is
+the Erlang module and actions are the Erlang functions associated to this
+entity. Each action operates either on the collection level, or on an individual
+resource. The fundamental difference is the ID; when an action operates on a
+resource, it has a mandatory ID, and when it operates on the collection, it
+doesn't deal with any ID at all.
+
+This distinction is needed for clarity.
+
+=== Breaking things down for you ===
+
+There are hundreds of ways to design a HTTP API and even more ways to map them
+to their processing functions; some are elegant, some simple, others complex.
+In fact, because HTTP requests (and responses) exhibit many properties and can
+potentially come in numerous forms, developers have been handling them in very
+different ways over the years, and that's why the existing HTTP APIs out there
+are so heterogenous; even if they do tend homogenize over time.
+
+Rodeo has done the job of breaking things down and coming up with a simple way
+to think about it but before presenting it, it can be nice to look at the big
+picture.
+
+<b>A look at HTTP requests and responses.</b>
+
+<ul>
+  <li>HTTP requests has a URI which, by the way, can contain parameters (e.g `/foo/42/bar')</li>
+  <li>... in fact, if we break down further the path, we also need to consider query arguments (e.g `?foo=bar')</li>
+  <li>HTTP requests has a method that gives it a meaning</li>
+  <li>HTTP responses comes with a code status (1xx, 2xx, 3xx, 4xx, 5xx)</li>
+  <li>Both HTTP requests and responses have a header, and with or without a body.</li>
+  <li>... the header providing info in key-value structure (e.g. has authentication info)</li>
+  <li>... the body can take any form (binary, text, json, html, pdf)</li>
+  <li>But that's not it, there's notion of multi-part body, etc.</li>
+</ul>
+
+<b>A look at Erlang functions.</b>
+
+<ul>
+  <li>Input is a <b>list</b> of values.</li>
+  <li>Output is always a <b>single</b> value.</li>
+  <li>Exceptions can be raised (purposely or not)</li>
+</ul>
+
+All those details are the very reasons why it's hard to make decisions, hard to
+keep things consistent, and easy to be confused, especially in a team where
+developers will do differently from member to member.
+
+=== Towards simplicity and restrictions ===
+
+This section is to be written.
+
+=== A journey through the Rodeo handler ===
+
+This section is to be written.
+
+=== Writing your API specifications ===
+
+This section is to be written.
+
+=== Routes generation with options ===
+
+This section is to be written.
